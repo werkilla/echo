@@ -1,0 +1,96 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<title>Echo iOS Audio Spike</title>
+<link rel="manifest" href="manifest.json">
+<style>
+  body { font-family: -apple-system, sans-serif; margin: 1rem; background: #111; color: #eee; }
+  button { font-size: 1.1rem; padding: .6rem 1rem; margin: .25rem; border-radius: .5rem; border: none; background: #4a6; color: #fff; }
+  #log { font-family: monospace; font-size: .75rem; white-space: pre-wrap; background: #000; padding: .5rem; margin-top: 1rem; max-height: 45vh; overflow-y: auto; }
+  .stat { font-size: 1.4rem; margin: .5rem 0; }
+</style>
+</head>
+<body>
+<h2>Echo Spike 1 — lock-screen audio (R2)</h2>
+<p>Tests: long-file background playback, Media Session lock-screen controls, chapter handoff while locked, Opus vs MP3.</p>
+
+<button id="playOgg">▶ Play Opus (.ogg)</button>
+<button id="playMp3">▶ Play MP3</button>
+<button id="clearLog">Clear log</button>
+
+<div class="stat" id="status">idle</div>
+<audio id="player" preload="auto"></audio>
+<div id="log"></div>
+
+<script>
+const player = document.getElementById('player');
+const logEl = document.getElementById('log');
+const statusEl = document.getElementById('status');
+const KEY = 'echo-spike-log';
+let heartbeats = 0;
+
+// Log survives screen lock: kept in localStorage, re-rendered on load.
+function log(msg) {
+  const line = `${new Date().toISOString().slice(11, 19)} ${msg}`;
+  const prev = localStorage.getItem(KEY) || '';
+  localStorage.setItem(KEY, (prev + '\n' + line).slice(-20000));
+  render();
+}
+function render() {
+  logEl.textContent = localStorage.getItem(KEY) || '';
+  logEl.scrollTop = logEl.scrollHeight;
+}
+render();
+log(`— page load (standalone: ${window.navigator.standalone === true}) —`);
+
+function play(src) {
+  player.src = src;
+  player.play().then(() => log(`play() ok: ${src}`))
+               .catch(e => log(`play() FAILED: ${e.message}`));
+  setMediaSession(src);
+}
+document.getElementById('playOgg').onclick = () => play('long_test_30min.ogg');
+document.getElementById('playMp3').onclick = () => play('long_test_30min.mp3');
+document.getElementById('clearLog').onclick = () => { localStorage.removeItem(KEY); render(); };
+
+function setMediaSession(src) {
+  if (!('mediaSession' in navigator)) { log('NO Media Session API'); return; }
+  navigator.mediaSession.metadata = new MediaMetadata({
+    title: `Echo spike — ${src}`, artist: 'Kokoro af_heart', album: 'Chapter 1',
+  });
+  navigator.mediaSession.setActionHandler('play', () => { player.play(); log('MS: play'); });
+  navigator.mediaSession.setActionHandler('pause', () => { player.pause(); log('MS: pause'); });
+  navigator.mediaSession.setActionHandler('previoustrack', () => { player.currentTime -= 15; log('MS: prev (−15s)'); });
+  navigator.mediaSession.setActionHandler('nexttrack', () => { player.currentTime += 15; log('MS: next (+15s)'); });
+  log('Media Session handlers set');
+}
+
+// Heartbeat every 30s of playback — gaps in these lines after unlock = iOS suspended us.
+player.addEventListener('timeupdate', () => {
+  const t = Math.floor(player.currentTime);
+  if (t > 0 && t % 30 === 0 && t !== heartbeats) {
+    heartbeats = t;
+    log(`heartbeat @ ${t}s`);
+  }
+});
+
+// "Chapter handoff": at file end, immediately load the other format — simulates
+// per-chapter file switch while the screen is locked. THE key test.
+player.addEventListener('ended', () => {
+  const next = player.src.endsWith('.ogg') ? 'long_test_30min.mp3' : 'long_test_30min.ogg';
+  log(`ENDED — handoff to ${next} (screen locked?)`);
+  play(next);
+});
+
+['error', 'stalled', 'suspend', 'waiting', 'pause'].forEach(ev =>
+  player.addEventListener(ev, () => log(`event: ${ev} @ ${Math.floor(player.currentTime)}s`)));
+document.addEventListener('visibilitychange', () => log(`visibility: ${document.visibilityState}`));
+setInterval(() => { statusEl.textContent = player.paused ? 'paused' : `playing @ ${Math.floor(player.currentTime)}s`; }, 1000);
+
+if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').then(() => log('SW registered'));
+</script>
+</body>
+</html>

@@ -1,0 +1,7 @@
+# Copy to deploy.local.mk (git-ignored) and set your real deploy target.
+# The Makefile includes deploy.local.mk automatically; these values override
+# the placeholders in the Makefile, so nothing host-specific is ever committed.
+DEPLOY_HOST  = you@your-server
+DEPLOY_PATH  = /opt/echo/app
+DOCKGE_STACK = /opt/dockge/stacks/echo
+SMOKE_URL    = http://your-server:7338

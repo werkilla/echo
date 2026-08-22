@@ -1,0 +1,299 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="theme-color" content="#1a1625">
+<title>Echo</title>
+<link rel="manifest" href="manifest.json">
+<style>
+  :root { --bg:#1a1625; --card:#252033; --fg:#e8e4f0; --dim:#9a92ac; --accent:#a78bfa; }
+  * { box-sizing: border-box; margin: 0; }
+  body { font-family: -apple-system, system-ui, sans-serif; background: var(--bg);
+         color: var(--fg); min-height: 100vh; padding: max(env(safe-area-inset-top),1rem) 1rem 2rem; }
+  h1 { font-size: 1.3rem; margin: .5rem 0 1rem; letter-spacing: .05em; }
+  .card { background: var(--card); border-radius: 1rem; padding: 1rem; margin-bottom: .8rem;
+          display: flex; gap: .9rem; align-items: center; }
+  .card img { width: 3.4rem; height: 5rem; object-fit: cover; border-radius: .4rem; background: #333; }
+  .card .meta { flex: 1; min-width: 0; }
+  .card .title { font-weight: 600; margin-bottom: .25rem; }
+  .card .sub { color: var(--dim); font-size: .8rem; }
+  button { font: inherit; border: 0; border-radius: .7rem; cursor: pointer;
+           background: var(--accent); color: #14101f; padding: .6rem 1rem; font-weight: 600; }
+  button.ghost { background: #38304a; color: var(--fg); }
+  #player { display: none; }
+  #player.active { display: block; }
+  #books.hidden { display: none; }
+  .cover-lg { width: 40vw; max-width: 190px; border-radius: .8rem; display: block; margin: .8rem auto; }
+  .now { text-align: center; margin: .6rem 0; }
+  .now .book { font-weight: 700; }
+  .now .ch { color: var(--dim); font-size: .85rem; margin-top: .2rem; }
+  #sentence { color: var(--dim); font-size: .9rem; text-align: center; min-height: 3.2em;
+              margin: .8rem 0; padding: 0 .5rem; font-style: italic; }
+  .controls { display: flex; justify-content: center; gap: .9rem; align-items: center; margin: 1rem 0; }
+  .controls button { width: 3.6rem; height: 3.6rem; border-radius: 50%; font-size: 1.15rem; }
+  #playBtn { width: 4.6rem; height: 4.6rem; font-size: 1.5rem; }
+  .row { display: flex; justify-content: center; gap: .7rem; align-items: center;
+         color: var(--dim); font-size: .85rem; margin: .5rem 0; flex-wrap: wrap; }
+  input[type=range] { width: 100%; accent-color: var(--accent); }
+  #status { text-align: center; color: var(--dim); font-size: .75rem; margin-top: 1rem; min-height: 1em; }
+  .back { background: none; color: var(--dim); padding: .3rem; font-weight: 400; }
+  #tapStart { display: none; position: fixed; inset: 0; z-index: 50; background: rgba(20,16,31,.94);
+              align-items: center; justify-content: center; text-align: center; }
+  #tapStart.active { display: flex; }
+  #tapStart .tap-play { width: 6.5rem; height: 6.5rem; border-radius: 50%; background: var(--accent);
+                        color: #14101f; font-size: 2.6rem; display: flex; align-items: center;
+                        justify-content: center; margin: 0 auto 1.1rem; }
+  #tapStart .tap-lbl { font-size: 1.15rem; font-weight: 600; }
+  #tapStart .tap-sub { color: var(--dim); font-size: .85rem; margin-top: .45rem; padding: 0 1.5rem; }
+</style>
+</head>
+<body>
+
+<div id="books">
+  <h1>ECHO</h1>
+  <div id="bookList"><p style="color:var(--dim)">Loading…</p></div>
+</div>
+
+<div id="player">
+  <button class="back ghost" onclick="showBooks()">‹ Library</button>
+  <img id="coverLg" class="cover-lg" alt="">
+  <div class="now"><div class="book" id="npTitle"></div><div class="ch" id="npChapter"></div></div>
+  <div id="sentence"></div>
+  <input type="range" id="scrub" min="0" max="100" value="0" step="0.1">
+  <div class="row"><span id="tCur">0:00</span> / <span id="tTot">0:00</span></div>
+  <div class="controls">
+    <button class="ghost" onclick="skipPara(-1)" title="previous paragraph">⏮</button>
+    <button id="playBtn" onclick="togglePlay()">▶</button>
+    <button class="ghost" onclick="skipPara(1)" title="next paragraph">⏭</button>
+  </div>
+  <div class="row">
+    <button class="ghost" onclick="chapterStep(-1)">‹ chapter</button>
+    <button class="ghost" onclick="bumpSpeed(-0.1)">−</button>
+    <span id="speedLbl">1.0×</span>
+    <button class="ghost" onclick="bumpSpeed(0.1)">+</button>
+    <button class="ghost" onclick="chapterStep(1)">chapter ›</button>
+  </div>
+  <div id="status"></div>
+</div>
+
+<div id="tapStart" onclick="dismissTapStart()">
+  <div>
+    <div class="tap-play">▶</div>
+    <div class="tap-lbl" id="tapLbl">Tap to resume</div>
+    <div class="tap-sub" id="tapSub"></div>
+  </div>
+</div>
+
+<audio id="audio" preload="auto"></audio>
+
+<script>
+const $ = id => document.getElementById(id);
+const audio = $('audio');
+const API = '';  // same origin
+
+let token = localStorage.getItem('echo-token') || '';
+let book = null;          // {series_id, title, spine_count}
+let spine = 0;            // current spine index
+let index = [];           // [{seg, block, offset_s, duration_s, text}]
+let lastReport = 0;
+let deepLinking = false;   // true while a ?play= launch is trying to autoplay
+
+function authHdr() { return { 'Authorization': 'Bearer ' + token }; }
+async function api(path, opts = {}) {
+  const r = await fetch(API + path, { ...opts, headers: { ...authHdr(), ...(opts.headers || {}) } });
+  if (r.status === 401) { askToken(); throw new Error('auth'); }
+  if (!r.ok) throw new Error(path + ' → ' + r.status);
+  return r.json();
+}
+function askToken() {
+  const t = prompt('Echo token:');
+  if (t) { token = t.trim(); localStorage.setItem('echo-token', token); boot(); }
+}
+// route the launch: resume if ?play= is present, else show the library
+function boot() {
+  const p = new URLSearchParams(location.search).get('play');
+  if (p) deepLinkPlay(p); else loadBooks();
+}
+
+// ---------- book list ----------
+async function loadBooks() {
+  try {
+    const books = await api('/api/books');
+    $('bookList').innerHTML = books.length ? '' : '<p style="color:var(--dim)">No books on deck — read a page in Kavita first.</p>';
+    for (const b of books) {
+      const el = document.createElement('div');
+      el.className = 'card';
+      el.innerHTML = `<img src="${b.cover}?token=${encodeURIComponent(token)}" onerror="this.style.visibility='hidden'">
+        <div class="meta"><div class="title">${b.title}</div>
+        <div class="sub">${b.chapters_done}/${b.spine_count} chapters ready</div></div>
+        <button>Resume</button>`;
+      el.querySelector('button').onclick = () => openBook(b);
+      $('bookList').appendChild(el);
+    }
+  } catch (e) { if (e.message !== 'auth') $('bookList').innerHTML = '<p style="color:var(--dim)">Echo unreachable: ' + e.message + '</p>'; }
+}
+function showBooks() { $('player').classList.remove('active'); $('books').classList.remove('hidden'); loadBooks(); }
+
+// ---------- deep link (?play=latest | ?play={series_id}) ----------
+async function deepLinkPlay(which) {
+  deepLinking = true;
+  try {
+    let target = null;
+    const books = await api('/api/books').catch(() => []);
+    if (which === 'latest') {
+      target = books[0] || null;                       // /api/books is sorted updated_at DESC
+    } else {
+      const sid = parseInt(which, 10);
+      target = books.find(b => b.series_id === sid) || null;
+    }
+    if (!target) {                                     // fall back to last-played we stashed locally
+      const last = localStorage.getItem('echo-last-book');
+      if (last) target = JSON.parse(last);
+    }
+    if (!target) { deepLinking = false; loadBooks(); return; }
+    await openBook(target, true);                       // openBook → loadChapter → autoplay
+  } catch (e) {
+    deepLinking = false;
+    $('bookList').innerHTML = '<p style="color:var(--dim)">Echo unreachable: ' + e.message + '</p>';
+    showBooks();
+  }
+}
+
+// ---------- player ----------
+async function openBook(b, autoplay = false) {
+  book = b;
+  localStorage.setItem('echo-last-book', JSON.stringify({ series_id: b.series_id, title: b.title, spine_count: b.spine_count, cover: b.cover }));
+  $('books').classList.add('hidden'); $('player').classList.add('active');
+  $('npTitle').textContent = b.title;
+  $('coverLg').src = `${b.cover}?token=${encodeURIComponent(token)}`;
+  const pos = await api(`/api/books/${b.series_id}/position`);
+  await loadChapter(pos.spine_index, pos.offset_s ?? 0, autoplay);
+}
+
+async function loadChapter(sp, offset, autoplay) {
+  spine = sp;
+  const idx = await api(`/api/books/${book.series_id}/chapters/${sp}/index`);
+  index = idx.segments;
+  $('npChapter').textContent = idx.title || `Part ${sp + 1} of ${book.spine_count}`;
+  setStatus(idx.status === 'done' ? '' : 'synthesizing — streaming live');
+  const base = `/api/audio/${book.series_id}/${sp}.mp3?token=${encodeURIComponent(token)}`;
+  const stream = `/api/books/${book.series_id}/stream?spine=${sp}&from_seg=0&token=${encodeURIComponent(token)}`;
+  audio.src = idx.status === 'done' ? base : stream;
+  audio.playbackRate = speed;
+  await new Promise(res => { audio.onloadedmetadata = res; audio.load(); });
+  if (offset && isFinite(audio.duration)) audio.currentTime = offset;
+  setMediaSession();
+  if (autoplay) play();
+  updateUI();
+}
+
+function play() {
+  return audio.play().then(() => {
+    $('playBtn').textContent = '⏸'; deepLinking = false; hideTapStart();
+  }).catch(e => {
+    if (deepLinking) showTapStart();          // deep-link launch: offer one big tap target
+    else setStatus('tap ▶ to start: ' + e.message);
+  });
+}
+function showTapStart() {
+  $('tapLbl').textContent = book ? 'Resume ' + book.title : 'Tap to resume';
+  $('tapSub').textContent = 'iOS needs one tap to start audio';
+  $('tapStart').classList.add('active');
+}
+function hideTapStart() { $('tapStart').classList.remove('active'); }
+function dismissTapStart() { hideTapStart(); play(); }   // now inside a user gesture → succeeds
+function pause() { audio.pause(); $('playBtn').textContent = '▶'; reportProgress(true); }
+function togglePlay() { audio.paused ? play() : pause(); }
+
+function currentSeg() {
+  let cur = index[0];
+  for (const s of index) { if (s.offset_s != null && s.offset_s <= audio.currentTime) cur = s; else break; }
+  return cur;
+}
+function skipPara(dir) {
+  const cur = currentSeg();
+  if (!cur) return;
+  // find segment at the start of the previous/next BLOCK
+  const blocks = [...new Set(index.filter(s => s.offset_s != null).map(s => s.block))];
+  const bi = blocks.indexOf(cur.block);
+  const target = blocks[Math.min(Math.max(bi + dir, 0), blocks.length - 1)];
+  const seg = index.find(s => s.block === target);
+  if (seg && seg.offset_s != null) audio.currentTime = seg.offset_s;
+}
+async function chapterStep(dir) {
+  const next = spine + dir;
+  if (next < 0 || next >= book.spine_count) return;
+  await loadChapter(next, 0, !audio.paused);
+}
+
+let speed = parseFloat(localStorage.getItem('echo-speed') || '1.0');
+function bumpSpeed(d) {
+  speed = Math.min(2.0, Math.max(0.8, Math.round((speed + d) * 10) / 10));
+  audio.playbackRate = speed;
+  localStorage.setItem('echo-speed', speed);
+  $('speedLbl').textContent = speed.toFixed(1) + '×';
+}
+
+// ---------- progress write-back ----------
+async function reportProgress(force = false) {
+  if (!book || !index.length) return;
+  const now = Date.now();
+  if (!force && now - lastReport < 30000) return;
+  lastReport = now;
+  const cur = currentSeg();
+  if (!cur) return;
+  try {
+    const r = await api(`/api/books/${book.series_id}/progress`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ spine_index: spine, block_index: cur.block }),
+    });
+    setStatus(r.written ? 'synced to Kavita ✓' : 'sync held: ' + r.reason);
+  } catch (e) { setStatus('sync failed'); }
+}
+
+// ---------- media session (lock screen) ----------
+function setMediaSession() {
+  if (!('mediaSession' in navigator)) return;
+  navigator.mediaSession.metadata = new MediaMetadata({
+    title: $('npChapter').textContent, artist: book.title, album: 'Echo',
+    artwork: [{ src: `${location.origin}${book.cover}?token=${encodeURIComponent(token)}`, sizes: '512x512', type: 'image/png' }],
+  });
+  navigator.mediaSession.setActionHandler('play', play);
+  navigator.mediaSession.setActionHandler('pause', pause);
+  navigator.mediaSession.setActionHandler('previoustrack', () => skipPara(-1));
+  navigator.mediaSession.setActionHandler('nexttrack', () => skipPara(1));
+}
+
+// ---------- wiring ----------
+audio.addEventListener('timeupdate', () => { updateUI(); reportProgress(); });
+audio.addEventListener('ended', async () => {
+  reportProgress(true);
+  if (spine + 1 < book.spine_count) await loadChapter(spine + 1, 0, true);
+  else { pause(); setStatus('end of book 🎉'); }
+});
+$('scrub').addEventListener('input', e => {
+  if (isFinite(audio.duration)) audio.currentTime = (e.target.value / 100) * audio.duration;
+});
+
+function fmt(t) { if (!isFinite(t)) return '–:––'; const m = Math.floor(t / 60), s = Math.floor(t % 60); return `${m}:${String(s).padStart(2, '0')}`; }
+function updateUI() {
+  $('tCur').textContent = fmt(audio.currentTime);
+  $('tTot').textContent = fmt(audio.duration);
+  if (isFinite(audio.duration) && audio.duration > 0)
+    $('scrub').value = (audio.currentTime / audio.duration) * 100;
+  const cur = currentSeg();
+  if (cur) $('sentence').textContent = cur.text;
+}
+function setStatus(msg) { $('status').textContent = msg; }
+
+$('speedLbl').textContent = speed.toFixed(1) + '×';
+if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js');
+
+if (!token) askToken();
+else boot();
+</script>
+</body>
+</html>

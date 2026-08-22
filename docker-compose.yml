@@ -1,0 +1,18 @@
+# Echo + Kokoro, built from this repo. Bridge networking, explicit ports.
+# `./data` holds the SQLite index, downloaded EPUBs, and synthesized MP3s.
+services:
+  echo:
+    build: .
+    image: echo:latest
+    container_name: echo
+    ports: ["7338:7338"]
+    env_file: .env
+    volumes:
+      - ./data:/config
+    depends_on: [kokoro]
+    restart: unless-stopped
+  kokoro:
+    image: ghcr.io/remsky/kokoro-fastapi-cpu:latest
+    container_name: kokoro
+    restart: unless-stopped
+    # no ports: — internal-only, echo reaches it at http://kokoro:8880

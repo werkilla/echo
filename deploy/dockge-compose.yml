@@ -1,0 +1,30 @@
+# Optional: image-only compose for running Echo under a stack manager such as
+# Dockge, where the image is built separately (e.g. by `make deploy`) and the
+# manager owns the running container. For a plain single-host run, use the
+# top-level docker-compose.yml instead.
+#
+# Adjust the bind-mount path to wherever you keep Echo's data on your host.
+services:
+  echo:
+    image: echo:latest
+    container_name: echo
+    ports: ["7338:7338"]
+    env_file: .env
+    volumes:
+      - ./data:/config
+    depends_on: [kokoro]
+    restart: unless-stopped
+  kokoro:
+    image: ghcr.io/remsky/kokoro-fastapi-cpu:latest
+    container_name: kokoro
+    restart: unless-stopped
+    # internal-only: echo reaches it at http://kokoro:8880
+
+# Optional: pin the Docker network to a subnet that won't collide with your LAN.
+# Auto-assigned Docker networks can grab a range overlapping your LAN and break
+# container→host routing; pinning an unused private /24 avoids that.
+networks:
+  default:
+    ipam:
+      config:
+        - subnet: 10.211.77.0/24

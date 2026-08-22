@@ -1,0 +1,16 @@
+.env
+deploy.local.mk
+__pycache__/
+*.pyc
+.venv/
+venv/
+.DS_Store
+config/
+data/
+swagger.json
+spikes/results/
+*.ogg
+*.mp3
+!tests/fixtures/*.mp3
+*.opus
+*.wav
