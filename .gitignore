@@ -14,3 +14,11 @@ spikes/results/
 !tests/fixtures/*.mp3
 *.opus
 *.wav
+
+# AI-directed working docs (project-playbook): local-only, never published.
+# Matched at any depth, so `docs/HANDOFF.md` etc. are ignored too.
+# If you ever want to publish one deliberately, add it with: git add -f <file>
+HANDOFF.md
+ROADMAP.md
+design.md
+docs/internal/
