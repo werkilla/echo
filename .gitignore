@@ -15,10 +15,9 @@ spikes/results/
 *.opus
 *.wav
 
-# AI-directed working docs (project-playbook): local-only, never published.
-# Matched at any depth, so `docs/HANDOFF.md` etc. are ignored too.
-# If you ever want to publish one deliberately, add it with: git add -f <file>
-HANDOFF.md
-ROADMAP.md
-design.md
+# AI-directed working docs — split by kind (see the project-playbook skill):
+#   Public, committed: README.md, ROADMAP.md, docs/design.md (kept host-free).
+#   Internal, never published: everything under docs/internal/, plus HANDOFF/OPS anywhere.
 docs/internal/
+HANDOFF.md
+OPS.md

@@ -12,6 +12,8 @@ and there are no per-word cloud costs.
 > works, it's tested, and the reasoning below is honest about the trade-offs.
 > Issues are welcome, but I may be slow, and I'm not taking feature requests.
 
+**Full design spec:** [docs/design.md](docs/design.md) — the problem, the decision table, the Kavita position model, and the risk register, written before the build.
+
 ## What it does
 
 - Reads your current position from Kavita (down to the paragraph).
