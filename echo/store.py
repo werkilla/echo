@@ -27,7 +27,8 @@ CREATE TABLE IF NOT EXISTS books (
   pages INTEGER,               -- Kavita totalPages == spine count (R6 tripwire)
   spine_count INTEGER,
   epub_mtime REAL,
-  updated_at REAL
+  updated_at REAL,
+  archived INTEGER DEFAULT 0   -- hidden from the library + skipped by the scheduler
 );
 CREATE TABLE IF NOT EXISTS chapters (
   series_id INTEGER,
@@ -78,7 +79,14 @@ class Store:
         self._db.row_factory = sqlite3.Row
         with self._lock:
             self._db.executescript(SCHEMA)
+            self._migrate()
             self._db.commit()
+
+    def _migrate(self) -> None:
+        """Add columns to pre-existing DBs (CREATE TABLE IF NOT EXISTS won't)."""
+        cols = {r["name"] for r in self._db.execute("PRAGMA table_info(books)")}
+        if "archived" not in cols:
+            self._db.execute("ALTER TABLE books ADD COLUMN archived INTEGER DEFAULT 0")
 
     # -- paths ---------------------------------------------------------------
 
@@ -103,8 +111,13 @@ class Store:
                     chapter_id: int, library_id: int, pages: int,
                     spine_count: int, epub_mtime: float) -> None:
         with self._lock:
+            # archived is intentionally omitted — a Kavita refresh must not
+            # resurrect a book the user archived (it stays 0 on first insert).
             self._db.execute(
-                """INSERT INTO books VALUES (?,?,?,?,?,?,?,?,?)
+                """INSERT INTO books (series_id, title, kavita_volume_id,
+                     kavita_chapter_id, kavita_library_id, pages, spine_count,
+                     epub_mtime, updated_at)
+                   VALUES (?,?,?,?,?,?,?,?,?)
                    ON CONFLICT(series_id) DO UPDATE SET title=excluded.title,
                      kavita_volume_id=excluded.kavita_volume_id,
                      kavita_chapter_id=excluded.kavita_chapter_id,
@@ -115,16 +128,32 @@ class Store:
                  pages, spine_count, epub_mtime, time.time()))
             self._db.commit()
 
+    def set_archived(self, series_id: int, archived: bool) -> None:
+        with self._lock:
+            self._db.execute("UPDATE books SET archived=? WHERE series_id=?",
+                             (1 if archived else 0, series_id))
+            self._db.commit()
+
+    def is_archived(self, series_id: int) -> bool:
+        b = self.book(series_id)
+        return bool(b and b.get("archived"))
+
     def book(self, series_id: int) -> dict | None:
         with self._lock:
             r = self._db.execute("SELECT * FROM books WHERE series_id=?",
                                  (series_id,)).fetchone()
         return dict(r) if r else None
 
-    def books(self) -> list[dict]:
+    def books(self, archived: bool | None = False) -> list[dict]:
+        """archived=False → active library (default); True → archive; None → all."""
+        sql = "SELECT * FROM books"
+        params: tuple = ()
+        if archived is not None:
+            sql += " WHERE archived=?"
+            params = (1 if archived else 0,)
+        sql += " ORDER BY updated_at DESC"
         with self._lock:
-            return [dict(r) for r in self._db.execute(
-                "SELECT * FROM books ORDER BY updated_at DESC")]
+            return [dict(r) for r in self._db.execute(sql, params)]
 
     # -- chapters / segments ---------------------------------------------------
 

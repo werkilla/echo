@@ -20,7 +20,10 @@ and there are no per-word cloud costs.
 - Synthesizes the whole book to audio in the background, chapter by chapter,
   faster than real time, and keeps it.
 - Plays it back as a phone web-app (PWA) with lock-screen controls, variable
-  speed, paragraph/chapter skipping, and a live current-sentence display.
+  speed, and paragraph/chapter skipping, over a read-along view of the full
+  chapter text (inline italics/bold preserved) that tracks the spoken paragraph.
+- Lets you archive books you're done with into a separate list (and restore
+  them), so the library stays the books you're actually reading.
 - Writes your listening progress back to Kavita, so when you open the book to
   read again, you're within a page of where you stopped listening.
 

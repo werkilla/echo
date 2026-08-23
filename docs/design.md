@@ -1,12 +1,17 @@
 # Echo — Kavita Read-to-Listen Bridge
 
-**Spec version:** 1.2 · 2026-07-18 · **Status:** ✅ v1 shipped 2026-07-18
+**Spec version:** 1.3 · 2026-08-22 · **Status:** ✅ v1 shipped 2026-07-18
 
 > v1.1: full-book synthesis in the MVP, keep-everything retention, per-chapter playback
 > files (§6 D12–D14). v1.2: `pageNum`=spine-index position model (§7.3) and MP3 format
 > (§9.1), both verified live. Definition of done passed live on a real multi-chapter book:
 > read in Kavita → Echo resumed at the position → locked-phone playback through a chapter
 > boundary → Kavita reopened within a page.
+> v1.3 (§10–§11): the player replaces the cover image with a **read-along view of the full
+> chapter text** (inline emphasis preserved) that highlights the spoken paragraph; the PWA
+> resolves the Kavita→Echo resume paragraph client-side from the chapter index (fixing a
+> resume-at-chapter-top bug); books can be **archived** into a separate list and restored;
+> cover proxying is dropped.
 
 *Runtime specifics (the actual URL, host, and deploy paths) live outside this repo; this
 doc refers to upstreams by product name.*
@@ -239,10 +244,11 @@ books, including at least one light novel with images and one book with footnote
 
 | Endpoint | Purpose |
 |---|---|
-| `GET /api/books` | Active/recent books w/ progress, cover (proxied from Kavita), cache status |
+| `GET /api/books` | Active library w/ progress + cache status (`?archived=true` for the archive) |
 | `POST /api/books/{id}/prepare` | Force warm-cache |
+| `POST /api/books/{id}/archive` · `…/unarchive` | Move a book to/from the archive (hidden + scheduler-skipped; reversible) |
 | `GET /api/books/{id}/position` | Resolved position: chapter, paragraph idx, segment idx |
-| `GET /api/books/{id}/chapters/{ch}/index` | Sentence→timestamp index (seek map, text snippets) |
+| `GET /api/books/{id}/chapters/{ch}/index` | Sentence→timestamp index (seek map) **+ full read-along blocks** (paragraph HTML w/ inline emphasis) |
 | `GET /api/audio/{bookId}/{chapterId}.mp3` | Chapter audio file (range requests; progressive/chunked while synthesizing on miss) |
 | `DELETE /api/books/{id}/audio` | Delete a book's stored audio (manual retention control) |
 | `POST /api/books/{id}/progress` | Player reports playhead → triggers Kavita write-back rules |
@@ -255,9 +261,12 @@ only; this is a seatbelt, not a vault.)
 
 - Served by Echo at `/`. Installable (manifest + service worker for shell caching only — no
   offline audio in v1).
-- Screens: **Book list** (active books, resume buttons, cache status) and **Player** (cover,
-  chapter/paragraph indicator, current-sentence text, play/pause, ±paragraph skip, speed
-  0.8–2.0× in 0.1 steps persisted in localStorage, scrub within chapter by paragraph).
+- Screens: **Book list** (active books, resume + archive buttons, cache status; an Archive
+  toggle shows archived books with Restore) and **Player** (chapter/paragraph indicator, a
+  **read-along view of the full chapter text** with inline emphasis that highlights and
+  auto-scrolls to the spoken paragraph, play/pause, ±paragraph skip, speed 0.8–2.0× in 0.1
+  steps persisted in localStorage, scrub within chapter). *(v1.3: the read-along text replaced
+  the cover image — covers weren't rendering and full text is more useful while listening.)*
 - **Playback engine *(v1.1)*:** one `<audio>` element per chapter file; seek/skip via the
   sentence→timestamp index; next chapter preloaded near the end for a clean handoff. (Replaces
   the alternating-elements segment chain — per-chapter files made it unnecessary.)

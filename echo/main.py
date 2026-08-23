@@ -9,7 +9,7 @@ from datetime import datetime, timezone
 
 import requests
 from fastapi import Depends, FastAPI, HTTPException, Request
-from fastapi.responses import FileResponse, Response, StreamingResponse
+from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
@@ -62,18 +62,20 @@ def health():
 
 # -- books ------------------------------------------------------------------------
 
+def _book_summary(b: dict) -> dict:
+    sid = b["series_id"]
+    return {
+        "series_id": sid, "title": b["title"],
+        "spine_count": b["spine_count"],
+        "chapters_done": store.chapters_done(sid),
+        "archived": bool(b.get("archived")),
+    }
+
+
 @app.get("/api/books", dependencies=[Depends(auth)])
-def books():
-    out = []
-    for b in store.books():
-        sid = b["series_id"]
-        out.append({
-            "series_id": sid, "title": b["title"],
-            "spine_count": b["spine_count"],
-            "chapters_done": store.chapters_done(sid),
-            "cover": f"/api/books/{sid}/cover",
-        })
-    return out
+def books(archived: bool = False):
+    """Active library by default; ?archived=true for the archive."""
+    return [_book_summary(b) for b in store.books(archived=archived)]
 
 
 @app.post("/api/books/refresh", dependencies=[Depends(auth)])
@@ -92,15 +94,20 @@ def prepare(sid: int):
     return {"status": "queued"}
 
 
-@app.get("/api/books/{sid}/cover", dependencies=[Depends(auth)])
-def cover(sid: int):
-    try:
-        r = kavita._request("GET", "/api/image/series-cover", params={"seriesId": sid})
-        if r.ok:
-            return Response(r.content, media_type=r.headers.get("content-type", "image/png"))
-    except Exception:
-        pass
-    raise HTTPException(404)
+@app.post("/api/books/{sid}/archive", dependencies=[Depends(auth)])
+def archive(sid: int):
+    if not store.book(sid):
+        raise HTTPException(404, "unknown book")
+    store.set_archived(sid, True)
+    return {"series_id": sid, "archived": True}
+
+
+@app.post("/api/books/{sid}/unarchive", dependencies=[Depends(auth)])
+def unarchive(sid: int):
+    if not store.book(sid):
+        raise HTTPException(404, "unknown book")
+    store.set_archived(sid, False)
+    return {"series_id": sid, "archived": False}
 
 
 @app.get("/api/books/{sid}/position", dependencies=[Depends(auth)])
@@ -137,6 +144,10 @@ def chapter_index(sid: int, spine: int):
             "offset_s": s.offset_s, "duration_s": s.duration_s,
             "text": s.text[:120],
         } for s in segs],
+        # full read-along text with inline emphasis preserved (§11 reader view)
+        "blocks": [{
+            "index": b.index, "tag": b.tag, "html": b.html,
+        } for b in chapters[spine].blocks],
     }
 
 

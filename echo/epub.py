@@ -10,6 +10,7 @@ import io
 import re
 import zipfile
 from dataclasses import dataclass, field
+from html import escape as _esc
 
 from lxml import etree, html as lhtml
 
@@ -21,6 +22,9 @@ BLOCK_TAGS = {"p", "h1", "h2", "h3", "h4", "h5", "h6", "li", "blockquote"}
 SKIP_TAGS = {"table", "figure", "img", "svg", "pre", "code", "aside", "script", "style", "nav"}
 # Inline elements stripped but text kept — except sup/sub footnote markers, dropped
 DROP_INLINE = {"sup", "sub"}
+# Inline emphasis kept in the read-along display HTML (mapped to em/strong so the
+# PWA only styles two tags). Everything else is unwrapped, text preserved.
+_EMPHASIS = {"em": "em", "i": "em", "strong": "strong", "b": "strong"}
 
 _XHTML_NS = "{http://www.w3.org/1999/xhtml}"
 
@@ -34,6 +38,7 @@ class Block:
     char_start: int            # cumulative char offset of block start (raw chapter)
     char_end: int
     tag: str = "p"
+    html: str = ""             # read-along display HTML: em/strong kept, text escaped
 
 
 @dataclass
@@ -120,6 +125,33 @@ def _element_text(el, drop_inline=DROP_INLINE) -> str:
 
     walk(el)
     return "".join(parts)
+
+
+def _element_html(el) -> str:
+    """Read-along display HTML for one block: keep em/strong emphasis, escape all
+    text, drop footnote markers and skipped subtrees. Original typography (smart
+    quotes, em dashes) is preserved — this is for the eye, not the TTS engine.
+    """
+    parts: list[str] = []
+
+    def walk(node):
+        tag = _local(node.tag)
+        if tag in DROP_INLINE or tag in SKIP_TAGS:
+            return
+        emph = _EMPHASIS.get(tag) if node is not el else None
+        if emph:
+            parts.append(f"<{emph}>")
+        if node.text:
+            parts.append(_esc(node.text, quote=False))
+        for child in node:
+            walk(child)
+            if child.tail:
+                parts.append(_esc(child.tail, quote=False))
+        if emph:
+            parts.append(f"</{emph}>")
+
+    walk(el)
+    return re.sub(r"\s+", " ", "".join(parts)).strip()
 
 
 def _kavita_xpath(el, body) -> str:
@@ -212,6 +244,7 @@ def extract_blocks_and_ids(chapter_html: bytes) -> tuple[list[Block], dict[str, 
             char_start=offset,
             char_end=offset + len(raw_stripped),
             tag=tag,
+            html=_element_html(el),
         ))
         last_block_el = el
         offset += len(raw_stripped) + 1

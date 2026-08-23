@@ -42,6 +42,26 @@ def test_normalization_rules():
     assert normalize(s) == s
 
 
+def test_block_html_preserves_emphasis(fixture_epub):
+    """Read-along display HTML keeps em/strong, unwraps other inlines, escapes text."""
+    ch2 = parse_epub(fixture_epub)[1]
+    anchor = next(b for b in ch2.blocks if "Anchor target" in b.text)
+    assert "<em>inline</em>" in anchor.html   # emphasis kept
+    assert "<span" not in anchor.html          # non-emphasis inline unwrapped, text kept
+    assert "Anchor target with" in anchor.html
+
+
+def test_block_html_keeps_original_typography_and_escapes():
+    """Display HTML is for the eye: smart quotes stay; angle brackets are escaped."""
+    from echo.epub import extract_blocks
+    html = ("<html><body>"
+            "<p>She said <em>“no”</em> &amp; left &lt;quietly&gt;.</p>"
+            "</body></html>").encode("utf-8")
+    b = extract_blocks(html)[0]
+    assert "<em>“no”</em>" in b.html   # curly quotes preserved, not normalized
+    assert "&amp;" in b.html and "&lt;quietly&gt;" in b.html  # text re-escaped, no raw markup
+
+
 def test_block_coordinates_monotonic(fixture_epub):
     for ch in parse_epub(fixture_epub):
         prev_end = -1

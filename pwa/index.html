@@ -13,25 +13,37 @@
   * { box-sizing: border-box; margin: 0; }
   body { font-family: -apple-system, system-ui, sans-serif; background: var(--bg);
          color: var(--fg); min-height: 100vh; padding: max(env(safe-area-inset-top),1rem) 1rem 2rem; }
-  h1 { font-size: 1.3rem; margin: .5rem 0 1rem; letter-spacing: .05em; }
+  h1 { font-size: 1.3rem; letter-spacing: .05em; }
+  .hdr { display: flex; align-items: center; justify-content: space-between; margin: .5rem 0 1rem; }
   .card { background: var(--card); border-radius: 1rem; padding: 1rem; margin-bottom: .8rem;
           display: flex; gap: .9rem; align-items: center; }
-  .card img { width: 3.4rem; height: 5rem; object-fit: cover; border-radius: .4rem; background: #333; }
   .card .meta { flex: 1; min-width: 0; }
   .card .title { font-weight: 600; margin-bottom: .25rem; }
   .card .sub { color: var(--dim); font-size: .8rem; }
   button { font: inherit; border: 0; border-radius: .7rem; cursor: pointer;
            background: var(--accent); color: #14101f; padding: .6rem 1rem; font-weight: 600; }
   button.ghost { background: #38304a; color: var(--fg); }
+  button.small { padding: .4rem .8rem; font-size: .85rem; font-weight: 400; }
+  button.icon { padding: .55rem .7rem; }
   #player { display: none; }
   #player.active { display: block; }
   #books.hidden { display: none; }
-  .cover-lg { width: 40vw; max-width: 190px; border-radius: .8rem; display: block; margin: .8rem auto; }
   .now { text-align: center; margin: .6rem 0; }
   .now .book { font-weight: 700; }
   .now .ch { color: var(--dim); font-size: .85rem; margin-top: .2rem; }
-  #sentence { color: var(--dim); font-size: .9rem; text-align: center; min-height: 3.2em;
-              margin: .8rem 0; padding: 0 .5rem; font-style: italic; }
+  /* read-along reader (replaces the cover): full chapter text, current line lit */
+  #reader { max-height: 46vh; overflow-y: auto; -webkit-overflow-scrolling: touch;
+            margin: .8rem 0; padding: .3rem .3rem 1.2rem; line-height: 1.65; font-size: 1.02rem; }
+  #reader .blk { color: var(--dim); margin: 0 0 .7rem; padding: .1rem .45rem;
+                 border-radius: .45rem; transition: color .15s, background .15s; }
+  #reader h1.blk, #reader h2.blk, #reader h3.blk,
+  #reader h4.blk, #reader h5.blk, #reader h6.blk { color: var(--fg); font-size: 1.08rem; font-weight: 700; }
+  #reader blockquote.blk { border-left: 2px solid #38304a; padding-left: .8rem; font-style: italic; }
+  #reader li.blk { list-style: disc; margin-left: 1.4rem; }
+  #reader .blk.current { color: var(--fg); background: rgba(167,139,250,.16); }
+  #reader em { font-style: italic; }
+  #reader strong { font-weight: 700; }
+  #reader:empty::before { content: "Loading text…"; color: var(--dim); font-size: .9rem; }
   .controls { display: flex; justify-content: center; gap: .9rem; align-items: center; margin: 1rem 0; }
   .controls button { width: 3.6rem; height: 3.6rem; border-radius: 50%; font-size: 1.15rem; }
   #playBtn { width: 4.6rem; height: 4.6rem; font-size: 1.5rem; }
@@ -53,15 +65,15 @@
 <body>
 
 <div id="books">
-  <h1>ECHO</h1>
+  <div class="hdr"><h1 id="libTitle">ECHO</h1>
+    <button class="ghost small" id="archiveToggle" onclick="toggleArchiveView()">Archive</button></div>
   <div id="bookList"><p style="color:var(--dim)">Loading…</p></div>
 </div>
 
 <div id="player">
   <button class="back ghost" onclick="showBooks()">‹ Library</button>
-  <img id="coverLg" class="cover-lg" alt="">
   <div class="now"><div class="book" id="npTitle"></div><div class="ch" id="npChapter"></div></div>
-  <div id="sentence"></div>
+  <div id="reader"></div>
   <input type="range" id="scrub" min="0" max="100" value="0" step="0.1">
   <div class="row"><span id="tCur">0:00</span> / <span id="tTot">0:00</span></div>
   <div class="controls">
@@ -97,9 +109,13 @@ const API = '';  // same origin
 let token = localStorage.getItem('echo-token') || '';
 let book = null;          // {series_id, title, spine_count}
 let spine = 0;            // current spine index
-let index = [];           // [{seg, block, offset_s, duration_s, text}]
+let index = [];           // [{seg, block, offset_s, duration_s, text, _t}]
+let blocks = [];          // [{index, tag, html}] — full read-along text
+let streamStartSeg = 0;   // seg the current stream begins at (0 when assembled)
+let curBlock = -1;        // block currently highlighted in the reader
 let lastReport = 0;
-let deepLinking = false;   // true while a ?play= launch is trying to autoplay
+let deepLinking = false;  // true while a ?play= launch is trying to autoplay
+let archiveView = false;  // library list showing the archive?
 
 function authHdr() { return { 'Authorization': 'Bearer ' + token }; }
 async function api(path, opts = {}) {
@@ -121,19 +137,43 @@ function boot() {
 // ---------- book list ----------
 async function loadBooks() {
   try {
-    const books = await api('/api/books');
-    $('bookList').innerHTML = books.length ? '' : '<p style="color:var(--dim)">No books on deck — read a page in Kavita first.</p>';
+    const books = await api('/api/books' + (archiveView ? '?archived=true' : ''));
+    $('libTitle').textContent = archiveView ? 'ARCHIVE' : 'ECHO';
+    $('archiveToggle').textContent = archiveView ? '‹ Library' : 'Archive';
+    const empty = archiveView
+      ? 'Archive is empty.'
+      : 'No books on deck — read a page in Kavita first.';
+    $('bookList').innerHTML = books.length ? '' : `<p style="color:var(--dim)">${empty}</p>`;
     for (const b of books) {
       const el = document.createElement('div');
       el.className = 'card';
-      el.innerHTML = `<img src="${b.cover}?token=${encodeURIComponent(token)}" onerror="this.style.visibility='hidden'">
-        <div class="meta"><div class="title">${b.title}</div>
-        <div class="sub">${b.chapters_done}/${b.spine_count} chapters ready</div></div>
-        <button>Resume</button>`;
-      el.querySelector('button').onclick = () => openBook(b);
+      el.innerHTML = `<div class="meta"><div class="title"></div>
+        <div class="sub">${b.chapters_done}/${b.spine_count} chapters ready</div></div>`;
+      el.querySelector('.title').textContent = b.title;
+      if (archiveView) {
+        const restore = document.createElement('button');
+        restore.className = 'ghost'; restore.textContent = 'Restore';
+        restore.onclick = () => setArchived(b.series_id, false);
+        el.appendChild(restore);
+      } else {
+        const resume = document.createElement('button');
+        resume.textContent = 'Resume'; resume.onclick = () => openBook(b);
+        el.appendChild(resume);
+        const arch = document.createElement('button');
+        arch.className = 'ghost icon'; arch.title = 'Archive'; arch.textContent = '🗄';
+        arch.onclick = () => setArchived(b.series_id, true);
+        el.appendChild(arch);
+      }
       $('bookList').appendChild(el);
     }
   } catch (e) { if (e.message !== 'auth') $('bookList').innerHTML = '<p style="color:var(--dim)">Echo unreachable: ' + e.message + '</p>'; }
+}
+function toggleArchiveView() { archiveView = !archiveView; loadBooks(); }
+async function setArchived(sid, archived) {
+  try {
+    await api(`/api/books/${sid}/${archived ? 'archive' : 'unarchive'}`, { method: 'POST' });
+    loadBooks();
+  } catch (e) { setStatus('archive failed: ' + e.message); }
 }
 function showBooks() { $('player').classList.remove('active'); $('books').classList.remove('hidden'); loadBooks(); }
 
@@ -165,29 +205,93 @@ async function deepLinkPlay(which) {
 // ---------- player ----------
 async function openBook(b, autoplay = false) {
   book = b;
-  localStorage.setItem('echo-last-book', JSON.stringify({ series_id: b.series_id, title: b.title, spine_count: b.spine_count, cover: b.cover }));
+  localStorage.setItem('echo-last-book', JSON.stringify({ series_id: b.series_id, title: b.title, spine_count: b.spine_count }));
   $('books').classList.add('hidden'); $('player').classList.add('active');
   $('npTitle').textContent = b.title;
-  $('coverLg').src = `${b.cover}?token=${encodeURIComponent(token)}`;
+  $('reader').innerHTML = '';
+  // Kavita → Echo resume: the server resolves the reading position to a paragraph
+  // (block_index) straight from the parsed EPUB — reliable even before synthesis.
   const pos = await api(`/api/books/${b.series_id}/position`);
-  await loadChapter(pos.spine_index, pos.offset_s ?? 0, autoplay);
+  await loadChapter(pos.spine_index, pos.block_index ?? 0, autoplay);
 }
 
-async function loadChapter(sp, offset, autoplay) {
+async function loadChapter(sp, startBlock, autoplay) {
   spine = sp;
   const idx = await api(`/api/books/${book.series_id}/chapters/${sp}/index`);
   index = idx.segments;
+  blocks = idx.blocks || [];
+  renderReader();
+  curBlock = -1;
   $('npChapter').textContent = idx.title || `Part ${sp + 1} of ${book.spine_count}`;
-  setStatus(idx.status === 'done' ? '' : 'synthesizing — streaming live');
+  const done = idx.status === 'done';
+  setStatus(done ? '' : 'synthesizing — streaming live');
+  // resolve the paragraph → the segment to begin playback at
+  const startSeg = segForBlock(startBlock);
+  computeTimeline(startSeg, done);
   const base = `/api/audio/${book.series_id}/${sp}.mp3?token=${encodeURIComponent(token)}`;
-  const stream = `/api/books/${book.series_id}/stream?spine=${sp}&from_seg=0&token=${encodeURIComponent(token)}`;
-  audio.src = idx.status === 'done' ? base : stream;
+  // assembled → seek within the whole file; still synthesizing → stream FROM the
+  // resume segment so cold-start playback also begins at the right paragraph.
+  const stream = `/api/books/${book.series_id}/stream?spine=${sp}&from_seg=${done ? 0 : startSeg}&token=${encodeURIComponent(token)}`;
+  audio.src = done ? base : stream;
   audio.playbackRate = speed;
   await new Promise(res => { audio.onloadedmetadata = res; audio.load(); });
-  if (offset && isFinite(audio.duration)) audio.currentTime = offset;
+  if (done) {
+    const seg = index.find(s => s.seg === startSeg);
+    const offset = seg && seg.offset_s != null ? seg.offset_s : 0;
+    if (offset && isFinite(audio.duration)) audio.currentTime = offset;
+  }
   setMediaSession();
   if (autoplay) play();
   updateUI();
+}
+
+// first segment at/after the target paragraph (fallback: last segment)
+function segForBlock(startBlock) {
+  const s = index.find(s => s.block >= startBlock);
+  return s ? s.seg : (index.length ? index[index.length - 1].seg : 0);
+}
+
+// assign each segment a timeline offset (._t). Assembled chapters use absolute
+// offsets from the file; a mid-chapter stream is relative to its first segment,
+// accumulated from per-segment durations (NaN once a duration isn't known yet).
+function computeTimeline(startSeg, done) {
+  streamStartSeg = done ? 0 : startSeg;
+  if (done) {
+    for (const s of index) s._t = s.offset_s;
+  } else {
+    let acc = 0;
+    for (const s of index) {
+      if (s.seg < startSeg) { s._t = null; continue; }
+      s._t = acc;
+      acc = (s.duration_s != null) ? acc + s.duration_s : NaN;
+    }
+  }
+}
+
+function renderReader() {
+  const r = $('reader');
+  r.innerHTML = '';
+  for (const b of blocks) {
+    const tag = /^h[1-6]$/.test(b.tag) ? b.tag
+      : (b.tag === 'blockquote' ? 'blockquote' : (b.tag === 'li' ? 'li' : 'p'));
+    const el = document.createElement(tag);
+    el.className = 'blk';
+    el.dataset.block = b.index;
+    el.innerHTML = b.html || '';   // server-escaped; only <em>/<strong> survive
+    r.appendChild(el);
+  }
+}
+function highlightBlock(bi) {
+  if (bi === curBlock || bi == null) return;
+  curBlock = bi;
+  const r = $('reader');
+  let cur = null;
+  for (const el of r.children) {
+    const on = +el.dataset.block === bi;
+    el.classList.toggle('current', on);
+    if (on) cur = el;
+  }
+  if (cur) cur.scrollIntoView({ block: 'center', behavior: 'smooth' });
 }
 
 function play() {
@@ -209,19 +313,23 @@ function pause() { audio.pause(); $('playBtn').textContent = '▶'; reportProgre
 function togglePlay() { audio.paused ? play() : pause(); }
 
 function currentSeg() {
-  let cur = index[0];
-  for (const s of index) { if (s.offset_s != null && s.offset_s <= audio.currentTime) cur = s; else break; }
+  let cur = null;
+  for (const s of index) {
+    if (s._t == null || isNaN(s._t)) continue;
+    if (s._t <= audio.currentTime) cur = s; else break;
+  }
+  if (!cur) cur = index.find(s => s.seg >= streamStartSeg) || index[0];
   return cur;
 }
 function skipPara(dir) {
   const cur = currentSeg();
   if (!cur) return;
-  // find segment at the start of the previous/next BLOCK
-  const blocks = [...new Set(index.filter(s => s.offset_s != null).map(s => s.block))];
-  const bi = blocks.indexOf(cur.block);
-  const target = blocks[Math.min(Math.max(bi + dir, 0), blocks.length - 1)];
+  // find the segment at the start of the previous/next BLOCK
+  const blockIds = [...new Set(index.map(s => s.block))];
+  const bi = blockIds.indexOf(cur.block);
+  const target = blockIds[Math.min(Math.max(bi + dir, 0), blockIds.length - 1)];
   const seg = index.find(s => s.block === target);
-  if (seg && seg.offset_s != null) audio.currentTime = seg.offset_s;
+  if (seg && seg._t != null && !isNaN(seg._t) && isFinite(audio.duration)) audio.currentTime = seg._t;
 }
 async function chapterStep(dir) {
   const next = spine + dir;
@@ -259,7 +367,6 @@ function setMediaSession() {
   if (!('mediaSession' in navigator)) return;
   navigator.mediaSession.metadata = new MediaMetadata({
     title: $('npChapter').textContent, artist: book.title, album: 'Echo',
-    artwork: [{ src: `${location.origin}${book.cover}?token=${encodeURIComponent(token)}`, sizes: '512x512', type: 'image/png' }],
   });
   navigator.mediaSession.setActionHandler('play', play);
   navigator.mediaSession.setActionHandler('pause', pause);
@@ -285,7 +392,7 @@ function updateUI() {
   if (isFinite(audio.duration) && audio.duration > 0)
     $('scrub').value = (audio.currentTime / audio.duration) * 100;
   const cur = currentSeg();
-  if (cur) $('sentence').textContent = cur.text;
+  if (cur) highlightBlock(cur.block);
 }
 function setStatus(msg) { $('status').textContent = msg; }
 
