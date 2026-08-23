@@ -56,7 +56,11 @@ build:
 # otherwise. On a Linux server you can drop the `zsh -lc` wrapper.
 deploy: test
 	git push
-	ssh -t $(DEPLOY_HOST) 'zsh -lc "cd $(DEPLOY_PATH) && git pull && \
+	# fetch + hard-reset (not pull): the host is a build mirror, so it must match
+	# the pushed commit exactly — immune to force-pushes / history rewrites and to
+	# any stray local edits on the host. NOTE: this discards uncommitted changes
+	# in $(DEPLOY_PATH), which is intended for a deploy clone.
+	ssh -t $(DEPLOY_HOST) 'zsh -lc "cd $(DEPLOY_PATH) && git fetch origin && git reset --hard origin/main && \
 		docker build -t echo:latest . && \
 		cd $(DOCKGE_STACK) && docker compose up -d"'
 	@sleep 3 && $(MAKE) smoke
