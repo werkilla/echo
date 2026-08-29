@@ -52,7 +52,7 @@ LONG_SENT = ("It was a truth universally acknowledged, at least among the carava
 CH2 = f"""<?xml version="1.0" encoding="utf-8"?>
 <html xmlns="http://www.w3.org/1999/xhtml"><head><title>Two</title></head>
 <body>
-  <div class="wrapper"><div class="inner">
+  <div class="wrapper"><div class="inner" id="sec221">
     <h2>Chapter Two</h2>
     <p>First paragraph inside nested divs.</p>
     <p><span>Anchor target with <em>inline</em> children.</span></p>

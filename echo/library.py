@@ -107,7 +107,7 @@ class Library:
         ch = chapters[spine]
         if not ch.blocks:
             return Position(spine, 0, None, exact=False)
-        pos = resolve_scroll_id(prog.book_scroll_id, ch.blocks, ch.ids)
+        pos = resolve_scroll_id(prog.book_scroll_id, ch.blocks, ch.ids, ch.id_xpaths)
         seg = None
         segs = self.store.segments(series_id, spine)
         if segs:

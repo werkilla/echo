@@ -48,6 +48,7 @@ class Chapter:
     title: str | None
     blocks: list[Block] = field(default_factory=list)
     ids: dict[str, int] = field(default_factory=dict)  # element id → block index
+    id_xpaths: dict[str, str] = field(default_factory=dict)  # element id → its descoped XPath
 
     @property
     def total_chars(self) -> int:
@@ -191,9 +192,16 @@ def extract_blocks(chapter_html: bytes) -> list[Block]:
     return extract_blocks_and_ids(chapter_html)[0]
 
 
-def extract_blocks_and_ids(chapter_html: bytes) -> tuple[list[Block], dict[str, int]]:
-    """Blocks + element-id → block-index map (Kavita anchors by id() when
-    the top-visible element has an id — found live on ACOMAF chapter headings)."""
+def extract_blocks_and_ids(
+    chapter_html: bytes,
+) -> tuple[list[Block], dict[str, int], dict[str, str]]:
+    """Blocks + element-id → block-index map + element-id → its own descoped XPath.
+
+    Kavita anchors by id() when the top-visible element has an id (found live on
+    ACOMAF chapter headings). It also emits a *compound* form, id("X")/rel/path,
+    when the id sits on a wrapper element (seen live on 0.9.1 for books whose
+    paragraphs are nested in id'd divs) — the id_xpaths map lets the mapper expand
+    that back to an absolute XPath. See mapper.resolve_scroll_id."""
     root = _parse_chapter_html(chapter_html)
     body = root.find("body")
     if body is None:  # some EPUBs are XHTML-namespaced; lhtml usually strips, but be safe
@@ -202,10 +210,11 @@ def extract_blocks_and_ids(chapter_html: bytes) -> tuple[list[Block], dict[str, 
                 body = el
                 break
     if body is None:
-        return [], {}
+        return [], {}, {}
 
     blocks: list[Block] = []
     ids: dict[str, int] = {}
+    id_xpaths: dict[str, str] = {}
     last_block_el = None
     offset = 0
     skip_depth_elems: set = set()
@@ -219,6 +228,7 @@ def extract_blocks_and_ids(chapter_html: bytes) -> tuple[list[Block], dict[str, 
             inside_last = last_block_el is not None and (
                 el is last_block_el or last_block_el in set(el.iterancestors()))
             ids[el_id] = len(blocks) - 1 if inside_last else len(blocks)
+            id_xpaths[el_id] = _kavita_xpath(el, body)
         if tag in SKIP_TAGS:
             skip_depth_elems.update(el.iterdescendants())
             skip_depth_elems.add(el)
@@ -252,8 +262,8 @@ def extract_blocks_and_ids(chapter_html: bytes) -> tuple[list[Block], dict[str, 
     if blocks:  # clamp trailing ids (id after the last block)
         ids = {k: min(v, len(blocks) - 1) for k, v in ids.items()}
     else:
-        ids = {}
-    return blocks, ids
+        ids, id_xpaths = {}, {}
+    return blocks, ids, id_xpaths
 
 
 def parse_epub(data: bytes) -> list[Chapter]:
@@ -261,14 +271,14 @@ def parse_epub(data: bytes) -> list[Chapter]:
     epub = Epub(data)
     chapters: list[Chapter] = []
     for i, href in enumerate(epub.spine_hrefs):
-        blocks, ids = extract_blocks_and_ids(epub.chapter_html(href))
+        blocks, ids, id_xpaths = extract_blocks_and_ids(epub.chapter_html(href))
         title = None
         for b in blocks:
             if b.tag.startswith("h"):
                 title = b.text
                 break
         chapters.append(Chapter(spine_index=i, href=href, title=title,
-                                blocks=blocks, ids=ids))
+                                blocks=blocks, ids=ids, id_xpaths=id_xpaths))
     return chapters
 
 

@@ -50,52 +50,79 @@ def _normalize_xpath(xp: str) -> str:
 
 
 _ID_FORM = re.compile(r"""^id\(\s*["']([^"']+)["']\s*\)\s*$""")
+# Compound form: an id() anchor followed by a relative path — id("221")/p[2].
+_ID_PREFIX = re.compile(r"""^id\(\s*["']([^"']+)["']\s*\)/(.+)$""")
+
+
+def _item_start(book_scroll_id: str | None) -> ResolvedPosition:
+    """Fallback: start of the spine item (pageNum already located the document, so
+    worst case is re-hearing the top of the current 'page' — D3 overlap)."""
+    log.warning("mapper fallback: item-start (scrollId=%r unresolvable)", book_scroll_id)
+    return ResolvedPosition(0, exact=False, reason="item-start")
 
 
 def resolve_scroll_id(
     book_scroll_id: str | None,
     blocks: list[Block],
     ids: dict[str, int] | None = None,
+    id_xpaths: dict[str, str] | None = None,
 ) -> ResolvedPosition:
     """bookScrollId → block index WITHIN the spine item pageNum points at.
 
-    Kavita stores two anchor dialects (both seen live on 0.9.0.2):
-      - descoped path XPath: //body/p[7]
-      - id() function form:  id("ch48")  — when the element has an id attribute
+    Kavita stores three anchor dialects (all seen live):
+      - descoped path XPath: //body/p[7]                         (0.9.0.2)
+      - id() function form:  id("ch48")                          (0.9.0.2)
+      - compound id() + path: id("221")/p[2]                     (0.9.1)
+        — the id sits on a wrapper element and the tail is relative to it. We
+        expand it to the id'd element's absolute XPath and resolve as an XPath;
+        without this the anchor is unparseable and drops to the chapter top.
 
-    Fallback: start of the item (pageNum already located the document, so
-    worst case is re-hearing the top of the current 'page' — D3 overlap).
+    Fallback: start of the item (see _item_start).
     """
-    if blocks and book_scroll_id:
-        m = _ID_FORM.match(book_scroll_id.strip())
-        if m:
-            if ids and m.group(1) in ids:
-                return ResolvedPosition(ids[m.group(1)], exact=True, reason="id")
-            log.warning("mapper: id() anchor %r not in id map", book_scroll_id)
-    if blocks and book_scroll_id and not _ID_FORM.match(book_scroll_id.strip()):
-        target = _normalize_xpath(book_scroll_id)
-        if target:
-            index = {_normalize_xpath(b.xpath): b.index for b in blocks}
-            # exact hit
-            if target in index:
-                return ResolvedPosition(index[target], exact=True)
-            # anchor may point at a child of a block (span/em inside a p) —
-            # nearest enclosing block = longest block xpath that prefixes target
-            best_idx, best_len = None, -1
-            for xp, idx in index.items():
-                if target.startswith(xp + "/") and len(xp) > best_len:
-                    best_idx, best_len = idx, len(xp)
-            if best_idx is not None:
-                return ResolvedPosition(best_idx, exact=True, reason="xpath-enclosing")
-            # nearest following block: first block whose xpath sorts after target
-            # within the same parent chain — approximate by document order compare
-            following = _first_following(target, blocks)
-            if following is not None:
-                return ResolvedPosition(following, exact=True, reason="xpath-following")
+    if not (blocks and book_scroll_id):
+        return _item_start(book_scroll_id)
+    s = book_scroll_id.strip()
 
-    # Fallback: start of the spine item (pageNum already located the document)
-    log.warning("mapper fallback: item-start (scrollId=%r unresolvable)", book_scroll_id)
-    return ResolvedPosition(0, exact=False, reason="item-start")
+    # Dialect 2: pure id("X")
+    m = _ID_FORM.match(s)
+    if m:
+        if ids and m.group(1) in ids:
+            return ResolvedPosition(ids[m.group(1)], exact=True, reason="id")
+        log.warning("mapper: id() anchor %r not in id map", book_scroll_id)
+        return _item_start(book_scroll_id)
+
+    # Dialect 3: compound id("X")/rel/path → rewrite to the id'd element's
+    # absolute descoped XPath + the relative tail, then fall through to XPath.
+    mc = _ID_PREFIX.match(s)
+    if mc:
+        if id_xpaths and mc.group(1) in id_xpaths:
+            s = id_xpaths[mc.group(1)].rstrip("/") + "/" + mc.group(2)
+        else:
+            log.warning("mapper: compound id() anchor %r not in id map", book_scroll_id)
+            return _item_start(book_scroll_id)
+
+    # Dialect 1 (and rewritten dialect 3): descoped XPath
+    target = _normalize_xpath(s)
+    if target:
+        index = {_normalize_xpath(b.xpath): b.index for b in blocks}
+        # exact hit
+        if target in index:
+            return ResolvedPosition(index[target], exact=True)
+        # anchor may point at a child of a block (span/em inside a p) —
+        # nearest enclosing block = longest block xpath that prefixes target
+        best_idx, best_len = None, -1
+        for xp, idx in index.items():
+            if target.startswith(xp + "/") and len(xp) > best_len:
+                best_idx, best_len = idx, len(xp)
+        if best_idx is not None:
+            return ResolvedPosition(best_idx, exact=True, reason="xpath-enclosing")
+        # nearest following block: first block whose xpath sorts after target
+        # within the same parent chain — approximate by document order compare
+        following = _first_following(target, blocks)
+        if following is not None:
+            return ResolvedPosition(following, exact=True, reason="xpath-following")
+
+    return _item_start(book_scroll_id)
 
 
 def _first_following(target: str, blocks: list[Block]) -> int | None:

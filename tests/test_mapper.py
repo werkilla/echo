@@ -17,6 +17,24 @@ def test_id_anchor_resolution(fixture_epub):
     assert resolve_scroll_id("id('ch1')", ch1.blocks, ch1.ids).exact
 
 
+def test_compound_id_anchor_resolution(fixture_epub):
+    """Kavita's third anchor dialect: id("X")/rel/path — an id'd wrapper div plus a
+    relative XPath (seen live on 0.9.1 for books whose paragraphs sit in id'd divs).
+    Must land on the exact paragraph, not the top of the chapter (the old fallback)."""
+    ch2 = parse_epub(fixture_epub)[1]
+    assert "sec221" in ch2.id_xpaths
+    pos = resolve_scroll_id('id("sec221")/p[2]', ch2.blocks, ch2.ids, ch2.id_xpaths)
+    assert pos.exact and pos.reason.startswith("xpath")
+    assert "Anchor target" in ch2.blocks[pos.block_index].text
+    assert pos.block_index != 0  # regression: without the fix this fell back to chapter top
+    # single-quote variant resolves identically
+    assert resolve_scroll_id("id('sec221')/p[2]", ch2.blocks, ch2.ids,
+                             ch2.id_xpaths).block_index == pos.block_index
+    # unknown id in the compound form → safe item-start fallback, not a crash
+    miss = resolve_scroll_id('id("nope")/p[2]', ch2.blocks, ch2.ids, ch2.id_xpaths)
+    assert not miss.exact and miss.reason == "item-start"
+
+
 def test_exact_xpath_resolution(fixture_epub):
     ch1 = parse_epub(fixture_epub)[0]
     # Kavita-style anchor for the second <p> in body
