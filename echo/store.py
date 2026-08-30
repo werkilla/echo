@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import sqlite3
 import threading
 import time
@@ -132,6 +133,21 @@ class Store:
         with self._lock:
             self._db.execute("UPDATE books SET archived=? WHERE series_id=?",
                              (1 if archived else 0, series_id))
+            self._db.commit()
+
+    def delete_audio(self, series_id: int) -> None:
+        """Remove all synthesized audio for a book (regenerable from Kokoro)."""
+        path = os.path.join(self.dir, "audio", str(series_id))
+        if os.path.exists(path):
+            shutil.rmtree(path)
+
+    def delete_derived(self, series_id: int) -> None:
+        """Drop the parse-derived rows (chapters, segments, progress_log) so the
+        book can be rebuilt from a freshly downloaded EPUB. Leaves the books row
+        (and its archived flag) intact — upsert_book refreshes it on re-sync."""
+        with self._lock:
+            for tbl in ("chapters", "segments", "progress_log"):
+                self._db.execute(f"DELETE FROM {tbl} WHERE series_id=?", (series_id,))
             self._db.commit()
 
     def is_archived(self, series_id: int) -> bool:

@@ -163,12 +163,25 @@ async function loadBooks() {
         arch.className = 'ghost icon'; arch.title = 'Archive'; arch.textContent = '🗄';
         arch.onclick = () => setArchived(b.series_id, true);
         el.appendChild(arch);
+        const rf = document.createElement('button');
+        rf.className = 'ghost icon'; rf.title = 'Re-fetch from Kavita (rebuilds audio)';
+        rf.textContent = '🔄'; rf.onclick = () => refetchBook(b.series_id, b.title);
+        el.appendChild(rf);
       }
       $('bookList').appendChild(el);
     }
   } catch (e) { if (e.message !== 'auth') $('bookList').innerHTML = '<p style="color:var(--dim)">Echo unreachable: ' + e.message + '</p>'; }
 }
 function toggleArchiveView() { archiveView = !archiveView; loadBooks(); }
+async function refetchBook(sid, title) {
+  if (!confirm(`Re-fetch "${title}" from Kavita?\n\nThis discards Echo's cached copy and audio and re-synthesizes from the current file. Use it after replacing the book's file in Kavita.`)) return;
+  try {
+    setStatus('re-fetching…');
+    await api(`/api/books/${sid}/refetch`, { method: 'POST' });
+    setStatus('re-fetched — re-synthesizing');
+    loadBooks();
+  } catch (e) { setStatus('re-fetch failed: ' + e.message); }
+}
 async function setArchived(sid, archived) {
   try {
     await api(`/api/books/${sid}/${archived ? 'archive' : 'unarchive'}`, { method: 'POST' });

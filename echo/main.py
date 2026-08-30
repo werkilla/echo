@@ -253,11 +253,18 @@ def undo_sync(sid: int):
 
 @app.delete("/api/books/{sid}/audio", dependencies=[Depends(auth)])
 def delete_audio(sid: int):
-    import shutil
-    path = os.path.join(store.dir, "audio", str(sid))
-    if os.path.exists(path):
-        shutil.rmtree(path)
+    store.delete_audio(sid)
     return {"deleted": sid}
+
+
+@app.post("/api/books/{sid}/refetch", dependencies=[Depends(auth)])
+def refetch(sid: int):
+    """Discard Echo's cached EPUB/parse/audio for a book and re-pull the current
+    file from Kavita. Use after replacing the book's file in Kavita — Echo caches
+    by series id and won't re-download on its own."""
+    library.refetch(sid)
+    book = store.book(sid)
+    return _book_summary(book) if book else {"series_id": sid, "removed": True}
 
 
 # -- PWA (must be last: catch-all static mount) -------------------------------------------

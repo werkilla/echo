@@ -58,6 +58,24 @@ def test_plan_persists_segments(store, engine, fixture_epub):
     assert engine.plan_chapter(610, ch1) == n
 
 
+def test_evict_derived_and_audio(store, engine, fixture_epub):
+    """store.delete_derived / delete_audio wipe a book's cache (the refetch path)."""
+    ch1 = parse_epub(fixture_epub)[0]
+    engine.enqueue_chapter(610, ch1, PRIORITY_LIVE)
+    _drain(engine)
+    assert store.segments(610, 0)                       # segments present
+    audio_dir = os.path.join(store.dir, "audio", "610")
+    assert os.path.isdir(audio_dir)                     # audio written
+
+    store.delete_derived(610)
+    assert store.segments(610, 0) == []                 # derived rows gone
+    assert store.chapter_status(610, 0) == "pending"     # chapter row gone → default
+
+    store.delete_audio(610)
+    assert not os.path.exists(audio_dir)                # audio gone
+    store.delete_audio(610)                             # idempotent — no crash on missing
+
+
 def test_full_chapter_synthesis_and_assembly(store, engine, fixture_epub):
     ch1 = parse_epub(fixture_epub)[0]
     engine.enqueue_chapter(610, ch1, PRIORITY_LIVE)

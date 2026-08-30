@@ -78,6 +78,25 @@ class Library:
             library_id=series.get("libraryId", 0), pages=pages,
             spine_count=len(chapters), epub_mtime=os.path.getmtime(epub_path))
 
+    def refetch(self, series_id: int) -> None:
+        """Evict all cached state for a book and re-sync it from Kavita.
+
+        Echo caches the EPUB by series id and only re-downloads when the file is
+        missing (see _sync_book), so replacing a book's file in Kavita otherwise
+        leaves Echo serving the stale copy. This drops the in-memory parse, the
+        cached EPUB, the parse-derived DB rows and the synthesized audio, then
+        re-pulls the current EPUB from Kavita. The archived flag is preserved."""
+        with self._lock:
+            self._parsed.pop(series_id, None)
+        epub_path = self.store.epub_path(series_id)
+        if os.path.exists(epub_path):
+            os.remove(epub_path)
+        self.store.delete_audio(series_id)
+        self.store.delete_derived(series_id)
+        series = self.kavita.series(series_id)
+        series.setdefault("id", series_id)
+        self._sync_book(series)
+
     # -- parsed chapters --------------------------------------------------------
 
     def chapters(self, series_id: int) -> list[Chapter]:
