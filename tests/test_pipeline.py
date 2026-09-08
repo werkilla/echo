@@ -3,8 +3,73 @@
 import io
 import zipfile
 
-from echo.epub import MAX_SEG, MIN_SEG, parse_epub, segment_chapter
+from echo.epub import Epub, MAX_SEG, MIN_SEG, parse_epub, segment_chapter
 from echo.textnorm import normalize
+
+
+def _build_epub(entries, spine, opf_path="OEBPS/content.opf", rootfile=True):
+    """Minimal EPUB from (name, bytes) entries + [(item_id, href)] spine.
+
+    `entries` are literal zip names; `href`s are OPF manifest hrefs (relative to
+    the OPF dir, and may be URI-encoded or use ../). Used to exercise the reader
+    against the malformed-but-real books that turn up in the wild."""
+    items = "".join(
+        f'<item id="{iid}" href="{href}" media-type="application/xhtml+xml"/>'
+        for iid, href in spine)
+    refs = "".join(f'<itemref idref="{iid}"/>' for iid, _ in spine)
+    opf = (f'<?xml version="1.0"?><package xmlns="http://www.idpf.org/2007/opf"'
+           f' version="3.0" unique-identifier="uid"><metadata/>'
+           f'<manifest>{items}</manifest><spine>{refs}</spine></package>').encode()
+    rf = (f'<rootfiles><rootfile full-path="{opf_path}"'
+          f' media-type="application/oebps-package+xml"/></rootfiles>' if rootfile else "")
+    container = (f'<?xml version="1.0"?><container'
+                 f' xmlns="urn:oasis:names:tc:opendocument:xmlns:container"'
+                 f' version="1.0">{rf}</container>').encode()
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as z:
+        z.writestr("mimetype", "application/epub+zip")
+        z.writestr("META-INF/container.xml", container)
+        z.writestr(opf_path, opf)
+        for name, data in entries:
+            z.writestr(name, data)
+    return buf.getvalue()
+
+
+def test_relative_parent_href():
+    """Spine href with ../ (OPF in a subdir) must resolve; zipfile doesn't
+    normalize paths, so the raw joined name is absent from the archive."""
+    data = _build_epub(
+        [("Text/ch1.html", b"<html><body><p>Up and over.</p></body></html>")],
+        [("c1", "../Text/ch1.html")])
+    chapters = parse_epub(data)
+    assert len(chapters) == 1
+    assert any("Up and over" in b.text for b in chapters[0].blocks)
+
+
+def test_one_bad_chapter_does_not_lose_the_book():
+    """An empty spine file and a missing-from-zip spine file must each degrade to
+    an empty chapter, not abort the whole book — and spine_index stays aligned
+    with Kavita's page model (position write-back is keyed on spine_index)."""
+    data = _build_epub(
+        [("OEBPS/a.html", b""),  # empty file
+         ("OEBPS/c.html", b"<html><body><p>Good chapter.</p></body></html>")],
+        [("c1", "a.html"), ("c2", "missing.html"), ("c3", "c.html")])
+    chapters = parse_epub(data)
+    assert [c.spine_index for c in chapters] == [0, 1, 2]
+    assert [len(c.blocks) for c in chapters] == [0, 0, 1]
+    assert any("Good chapter" in b.text for b in chapters[2].blocks)
+
+
+def test_missing_rootfile_raises_clearly():
+    """container.xml without a rootfile → a clear ValueError, not an opaque
+    AttributeError on None.get(...)."""
+    data = _build_epub([("OEBPS/b.html", b"<p>x</p>")], [("c1", "b.html")],
+                       rootfile=False)
+    try:
+        Epub(data)
+        assert False, "expected ValueError"
+    except ValueError as e:
+        assert "rootfile" in str(e)
 
 
 def test_uri_encoded_spine_href(fixture_epub):

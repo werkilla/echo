@@ -7,11 +7,15 @@ system between position mapping (§7.3) and the audio pipeline (§9).
 from __future__ import annotations
 
 import io
+import logging
+import posixpath
 import re
 import zipfile
 from dataclasses import dataclass, field
 from html import escape as _esc
 from urllib.parse import unquote
+
+log = logging.getLogger(__name__)
 
 from lxml import etree, html as lhtml
 
@@ -79,7 +83,7 @@ class Epub:
 
     def __init__(self, data: bytes):
         self.zf = zipfile.ZipFile(io.BytesIO(data))
-        opf_path = self._opf_path()
+        opf_path = self._zip_name(self._opf_path())
         self.opf_dir = opf_path.rsplit("/", 1)[0] + "/" if "/" in opf_path else ""
         opf = etree.fromstring(self.zf.read(opf_path))
         ns = {"o": "http://www.idpf.org/2007/opf"}
@@ -101,26 +105,33 @@ class Epub:
     def _opf_path(self) -> str:
         container = etree.fromstring(self.zf.read("META-INF/container.xml"))
         ns = {"c": "urn:oasis:names:tc:opendocument:xmlns:container"}
-        return container.find(".//c:rootfile", ns).get("full-path")
+        rootfile = container.find(".//c:rootfile", ns)
+        full_path = rootfile.get("full-path") if rootfile is not None else None
+        if not full_path:
+            raise ValueError("EPUB container.xml has no rootfile full-path")
+        return full_path
 
     def chapter_html(self, href: str) -> bytes:
         return self.zf.read(self._zip_name(self.opf_dir + href))
 
     def _zip_name(self, name: str) -> str:
-        """Resolve an OPF href to an actual zip entry name.
+        """Resolve an OPF/container path to an actual zip entry name.
 
-        OPF manifest hrefs are URI-encoded per the EPUB spec (spaces as %20,
-        "'" as %27), but zip entries store the literal decoded filename — so a
-        book whose internal files contain spaces or punctuation KeyErrors if the
-        encoded href is looked up directly. Prefer the raw name (spec-compliant
-        readers that store encoded names still work), then the decoded form."""
-        names = self.zf.namelist()
-        if name in names:
-            return name
-        decoded = unquote(name)
-        if decoded in names:
-            return decoded
-        return name  # let zipfile raise its own KeyError with the original name
+        Real-world EPUBs diverge from a naive `zf.read(dir + href)` two ways:
+        - hrefs are URI-encoded per the spec (spaces as %20, "'" as %27) but zip
+          entries store the literal decoded filename — an encoded lookup KeyErrors
+          on any book whose internal files contain spaces or punctuation;
+        - hrefs may be relative with "../" (OPF in a subdir), which zipfile does
+          not normalize, so the raw joined path is absent from the archive.
+        Try the plausible spellings in order and return the first that exists;
+        fall back to the original so zipfile raises its own clear KeyError."""
+        candidates = [name, posixpath.normpath(name)]
+        candidates += [unquote(c) for c in list(candidates)]
+        names = set(self.zf.namelist())
+        for cand in candidates:
+            if cand in names:
+                return cand
+        return name
 
 
 # -- Block extraction ----------------------------------------------------------
@@ -219,6 +230,8 @@ def extract_blocks_and_ids(
     when the id sits on a wrapper element (seen live on 0.9.1 for books whose
     paragraphs are nested in id'd divs) — the id_xpaths map lets the mapper expand
     that back to an absolute XPath. See mapper.resolve_scroll_id."""
+    if not chapter_html or not chapter_html.strip():
+        return [], {}, {}  # empty spine file (seen live): no blocks, not a crash
     root = _parse_chapter_html(chapter_html)
     body = root.find("body")
     if body is None:  # some EPUBs are XHTML-namespaced; lhtml usually strips, but be safe
@@ -288,7 +301,14 @@ def parse_epub(data: bytes) -> list[Chapter]:
     epub = Epub(data)
     chapters: list[Chapter] = []
     for i, href in enumerate(epub.spine_hrefs):
-        blocks, ids, id_xpaths = extract_blocks_and_ids(epub.chapter_html(href))
+        try:
+            blocks, ids, id_xpaths = extract_blocks_and_ids(epub.chapter_html(href))
+        except Exception:
+            # One malformed/missing spine item must not lose the whole book.
+            # Emit an empty chapter so spine_index stays aligned with Kavita's
+            # page model (position write-back is keyed on spine_index).
+            log.exception("epub: skipping unreadable spine item %s (%s)", i, href)
+            blocks, ids, id_xpaths = [], {}, {}
         title = None
         for b in blocks:
             if b.tag.startswith("h"):
