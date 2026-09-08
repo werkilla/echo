@@ -1,7 +1,38 @@
 """EPUB pipeline tests: parsing, content rules, normalization, segmentation."""
 
+import io
+import zipfile
+
 from echo.epub import MAX_SEG, MIN_SEG, parse_epub, segment_chapter
 from echo.textnorm import normalize
+
+
+def test_uri_encoded_spine_href(fixture_epub):
+    """OPF hrefs are URI-encoded (%20, %27) but zip entries store the decoded
+    literal filename. Books whose internal files contain spaces/punctuation must
+    still parse instead of KeyError-ing in chapter_html."""
+    container = (b'<?xml version="1.0"?>'
+                 b'<container xmlns="urn:oasis:names:tc:opendocument:xmlns:container"'
+                 b' version="1.0"><rootfiles><rootfile full-path="OEBPS/content.opf"'
+                 b' media-type="application/oebps-package+xml"/></rootfiles></container>')
+    opf = (b'<?xml version="1.0"?>'
+           b'<package xmlns="http://www.idpf.org/2007/opf" version="3.0"'
+           b' unique-identifier="uid"><metadata/><manifest>'
+           b'<item id="c1" href="Text/A%20B%20Name%20-%20Guide%27s_split_003.html"'
+           b' media-type="application/xhtml+xml"/></manifest>'
+           b'<spine><itemref idref="c1"/></spine></package>')
+    ch = b"<html><body><p>Hello from the encoded chapter.</p></body></html>"
+
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as z:
+        z.writestr("mimetype", "application/epub+zip")
+        z.writestr("META-INF/container.xml", container)
+        z.writestr("OEBPS/content.opf", opf)
+        z.writestr("OEBPS/Text/A B Name - Guide's_split_003.html", ch)
+
+    chapters = parse_epub(buf.getvalue())
+    assert len(chapters) == 1
+    assert any("encoded chapter" in b.text for b in chapters[0].blocks)
 
 
 def test_spine_order_and_chapter_count(fixture_epub):

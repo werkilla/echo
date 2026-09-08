@@ -11,6 +11,7 @@ import re
 import zipfile
 from dataclasses import dataclass, field
 from html import escape as _esc
+from urllib.parse import unquote
 
 from lxml import etree, html as lhtml
 
@@ -103,7 +104,23 @@ class Epub:
         return container.find(".//c:rootfile", ns).get("full-path")
 
     def chapter_html(self, href: str) -> bytes:
-        return self.zf.read(self.opf_dir + href)
+        return self.zf.read(self._zip_name(self.opf_dir + href))
+
+    def _zip_name(self, name: str) -> str:
+        """Resolve an OPF href to an actual zip entry name.
+
+        OPF manifest hrefs are URI-encoded per the EPUB spec (spaces as %20,
+        "'" as %27), but zip entries store the literal decoded filename — so a
+        book whose internal files contain spaces or punctuation KeyErrors if the
+        encoded href is looked up directly. Prefer the raw name (spec-compliant
+        readers that store encoded names still work), then the decoded form."""
+        names = self.zf.namelist()
+        if name in names:
+            return name
+        decoded = unquote(name)
+        if decoded in names:
+            return decoded
+        return name  # let zipfile raise its own KeyError with the original name
 
 
 # -- Block extraction ----------------------------------------------------------
