@@ -21,8 +21,8 @@ from lxml import etree, html as lhtml
 
 from .textnorm import normalize
 
-# Block-level elements we read, in document order (§8.4)
-BLOCK_TAGS = {"p", "h1", "h2", "h3", "h4", "h5", "h6", "li", "blockquote"}
+# Block-level elements we read, in document order (§8.4).
+BLOCK_TAGS = {"p", "h1", "h2", "h3", "h4", "h5", "h6", "li", "blockquote", "div"}
 # Subtrees we skip entirely
 SKIP_TAGS = {"table", "figure", "img", "svg", "pre", "code", "aside", "script", "style", "nav"}
 # Inline elements stripped but text kept — except sup/sub footnote markers, dropped

@@ -60,6 +60,32 @@ def test_one_bad_chapter_does_not_lose_the_book():
     assert any("Good chapter" in b.text for b in chapters[2].blocks)
 
 
+def test_calibre_div_paragraphs_are_read():
+    """Calibre/pdf-converted books emit each paragraph within a <div> section
+    (prose in a child <span>) with an <h*> heading and no <p> at all. Regression:
+    A book read only its titles because <div> prose was
+    dropped. A wrapper <div> containing the paragraphs must still be skipped so
+    only the leaf paragraph divs become blocks (no duplication)."""
+    ch = (b"<html><body>"
+          b'<h2 class="c"><span>STORYLINE</span></h2>'
+          b'<div class="wrap">'
+          b'  <div class="p"><span>First paragraph of real prose here.</span></div>'
+          b'  <div class="spacer"></div>'
+          b'  <div class="p"><span>Second paragraph, also worth reading aloud.</span></div>'
+          b"</div>"
+          b'<div class="img"><img src="../Images/x.jpg"/></div>'
+          b"</body></html>")
+    data = _build_epub([("OEBPS/ch.html", ch)], [("c1", "ch.html")])
+    chapters = parse_epub(data)
+    texts = [b.text for b in chapters[0].blocks]
+    assert chapters[0].title == "STORYLINE"
+    assert any("First paragraph of real prose" in t for t in texts)
+    assert any("Second paragraph" in t for t in texts)
+    # heading + two leaf paragraphs only — the wrapper div and empty/img divs
+    # must not add blocks (no duplicated prose from the wrapper)
+    assert len(chapters[0].blocks) == 3
+
+
 def test_missing_rootfile_raises_clearly():
     """container.xml without a rootfile → a clear ValueError, not an opaque
     AttributeError on None.get(...)."""
